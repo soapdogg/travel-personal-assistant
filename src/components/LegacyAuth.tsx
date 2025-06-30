@@ -57,7 +57,7 @@ export default function LegacyAuth({ onLogin }: LegacyAuthProps) {
         if (typeof data === 'string') {
           result = JSON.parse(JSON.parse(data));
         } else {
-          result = JSON.parse(data as string);
+          result = JSON.parse(data as unknown as string);
         }
         console.log('Parsed result:', result);
         
