@@ -13,9 +13,31 @@ export const backend = defineBackend({
 backend.personalAssistantFunction.resources.lambda.addToRolePolicy(
   new PolicyStatement({
     effect: Effect.ALLOW,
-    actions: ["bedrock:InvokeModel"],
+    actions: [
+      "bedrock:*"
+    ],
     resources: [
-      `arn:aws:bedrock:*::foundation-model/${MODEL_ID}`,
+      `*`
+    ],
+  })
+);
+
+// Add permissions to access existing DynamoDB tables
+backend.personalAssistantFunction.resources.lambda.addToRolePolicy(
+  new PolicyStatement({
+    effect: Effect.ALLOW,
+    actions: [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:Query",
+      "dynamodb:Scan",
+      "dynamodb:UpdateItem",
+      "dynamodb:DeleteItem"
+    ],
+    resources: [
+      "arn:aws:dynamodb:*:*:table/lifting-tracker-users",
+      "arn:aws:dynamodb:*:*:table/lifting-tracker-workouts",
+      "arn:aws:dynamodb:*:*:table/lifting-tracker-workouts/index/*"
     ],
   })
 );
