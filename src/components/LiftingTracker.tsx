@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { generateClient } from 'aws-amplify/data';
 import { Amplify } from 'aws-amplify';
 import outputs from '../../amplify_outputs.json';
@@ -92,12 +92,7 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
   const [aiRecommendations, setAiRecommendations] = useState<Record<string, string>>({});
   const [loadingAI, setLoadingAI] = useState<Record<string, boolean>>({});
 
-  // Load workouts on component mount
-  useEffect(() => {
-    loadWorkouts();
-  }, []);
-
-  const loadWorkouts = async () => {
+  const loadWorkouts = useCallback(async () => {
     try {
       const { data } = await client.queries.getLegacyWorkouts({
         userId: user.username
@@ -109,7 +104,7 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
         if (typeof data === 'string') {
           result = JSON.parse(JSON.parse(data));
         } else {
-          result = JSON.parse(data as string);
+          result = JSON.parse(data as unknown as string);
         }
         if (result.success) {
           setWorkouts(result.workouts);
@@ -120,7 +115,12 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
     } catch (error) {
       console.error('Error loading workouts:', error);
     }
-  };
+  }, [user.username]);
+
+  // Load workouts on component mount
+  useEffect(() => {
+    loadWorkouts();
+  }, [loadWorkouts]);
 
   const addExerciseToSession = () => {
     const newExercise: WorkoutSession = {
@@ -204,7 +204,7 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
           if (typeof data === 'string') {
             result = JSON.parse(JSON.parse(data));
           } else {
-            result = JSON.parse(data as string);
+            result = JSON.parse(data as unknown as string);
           }
           
           console.log('Parsed save result:', result);
