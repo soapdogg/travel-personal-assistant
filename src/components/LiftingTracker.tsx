@@ -5,6 +5,33 @@ import { generateClient } from 'aws-amplify/data';
 import { Amplify } from 'aws-amplify';
 import outputs from '../../amplify_outputs.json';
 import type { Schema } from '../../amplify/data/resource';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend,
+  TimeScale,
+} from 'chart.js';
+import 'chartjs-adapter-date-fns';
+import { Line, Bar, Scatter } from 'react-chartjs-2';
+
+// Register Chart.js components
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend,
+  TimeScale
+);
 
 // Ensure Amplify is configured
 Amplify.configure(outputs);
@@ -89,6 +116,7 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
   const [workouts, setWorkouts] = useState<WorkoutData[]>([]);
   const [currentSession, setCurrentSession] = useState<WorkoutSession[]>([]);
   const [selectedExercise, setSelectedExercise] = useState<string>('squat');
+  const [selectedGraphExercise, setSelectedGraphExercise] = useState<string>('squat');
   const [aiRecommendations, setAiRecommendations] = useState<Record<string, string>>({});
   const [loadingAI, setLoadingAI] = useState<Record<string, boolean>>({});
 
@@ -301,36 +329,282 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
     };
   };
 
+  // Calculate 1RM using Epley formula: 1RM = weight * (1 + reps/30)
+  const calculate1RM = (weight: number, reps: number) => {
+    if (reps === 1) return weight;
+    return Math.round(weight * (1 + reps / 30));
+  };
+
+  const get1RMChartData = (exercise: string) => {
+    const exerciseWorkouts = workouts
+      .filter(w => w.exercise === exercise)
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    if (exerciseWorkouts.length === 0) return null;
+
+    const chartData = exerciseWorkouts.map(workout => {
+      // Find the set with highest estimated 1RM
+      const best1RM = Math.max(...workout.sets.map(set => 
+        calculate1RM(set.weight, set.reps)
+      ));
+      
+      return {
+        x: new Date(workout.date),
+        y: best1RM
+      };
+    });
+
+    return {
+      datasets: [{
+        label: '1RM Progression',
+        data: chartData,
+        borderColor: '#64ffda',
+        backgroundColor: 'rgba(100, 255, 218, 0.1)',
+        tension: 0.4,
+        pointBackgroundColor: '#64ffda',
+        pointBorderColor: '#64ffda',
+        fill: false,
+      }]
+    };
+  };
+
+  const getVolumeChartData = (exercise: string) => {
+    const exerciseWorkouts = workouts
+      .filter(w => w.exercise === exercise)
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    if (exerciseWorkouts.length === 0) return null;
+
+    const chartData = exerciseWorkouts.map(workout => {
+      // Calculate total volume (weight × reps for all sets)
+      const totalVolume = workout.sets.reduce((sum, set) => 
+        sum + (set.weight * set.reps), 0
+      );
+      
+      return {
+        x: new Date(workout.date),
+        y: totalVolume
+      };
+    });
+
+    return {
+      datasets: [{
+        label: 'Volume per Session',
+        data: chartData,
+        backgroundColor: 'rgba(100, 255, 218, 0.7)',
+        borderColor: '#64ffda',
+        borderWidth: 1,
+      }]
+    };
+  };
+
+  const getMaxWeightChartData = (exercise: string) => {
+    const exerciseWorkouts = workouts
+      .filter(w => w.exercise === exercise)
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    if (exerciseWorkouts.length === 0) return null;
+
+    const chartData = exerciseWorkouts.map(workout => {
+      // Find the set with the highest weight
+      const maxWeightSet = workout.sets.reduce((max, set) => 
+        set.weight > max.weight ? set : max
+      );
+      
+      return {
+        x: new Date(workout.date),
+        y: maxWeightSet.weight,
+        // Scale reps (1-8) to circle radius (6-20) for better visibility
+        r: 6 + (maxWeightSet.reps - 1) * 2,
+        reps: maxWeightSet.reps
+      };
+    });
+
+    return {
+      datasets: [{
+        label: 'Max Weight',
+        data: chartData,
+        backgroundColor: 'rgba(255, 99, 132, 0.6)',
+        borderColor: '#ff6384',
+        borderWidth: 2,
+        pointRadius: (context: any) => {
+          return context.raw?.r || 6;
+        },
+        pointHoverRadius: (context: any) => {
+          const baseRadius = context.raw?.r || 6;
+          return baseRadius + 2;
+        },
+      }]
+    };
+  };
+
+  const maxWeightChartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        labels: {
+          color: '#e0e0e0',
+        }
+      },
+      tooltip: {
+        callbacks: {
+          label: function(context: any) {
+            const point = context.raw;
+            return `${point.y} lbs × ${point.reps} reps`;
+          }
+        }
+      }
+    },
+    scales: {
+      x: {
+        type: 'time' as const,
+        time: {
+          unit: 'day' as const,
+          displayFormats: {
+            day: 'MMM dd'
+          },
+          tooltipFormat: 'MMM dd, yyyy'
+        },
+        ticks: {
+          color: '#e0e0e0',
+          maxTicksLimit: 8,
+          source: 'auto' as const
+        },
+        grid: {
+          color: 'rgba(224, 224, 224, 0.1)',
+        },
+        title: {
+          display: true,
+          text: 'Date',
+          color: '#e0e0e0'
+        }
+      },
+      y: {
+        ticks: {
+          color: '#e0e0e0',
+          callback: function(value: any) {
+            return value + ' lbs';
+          }
+        },
+        grid: {
+          color: 'rgba(224, 224, 224, 0.1)',
+        },
+        beginAtZero: false,
+        title: {
+          display: true,
+          text: 'Weight (lbs)',
+          color: '#e0e0e0'
+        }
+      }
+    }
+  };
+
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        labels: {
+          color: '#e0e0e0',
+        }
+      },
+      tooltip: {
+        callbacks: {
+          label: function(context: any) {
+            const value = context.parsed.y;
+            if (context.dataset.label === '1RM Progression') {
+              return `${value} lbs (1RM)`;
+            } else if (context.dataset.label === 'Volume per Session') {
+              return `${value} lbs (total volume)`;
+            }
+            return `${value} lbs`;
+          }
+        }
+      }
+    },
+    scales: {
+      x: {
+        type: 'time' as const,
+        time: {
+          unit: 'day' as const,
+          displayFormats: {
+            day: 'MMM dd'
+          },
+          tooltipFormat: 'MMM dd, yyyy'
+        },
+        ticks: {
+          color: '#e0e0e0',
+          maxTicksLimit: 8,
+          source: 'auto' as const
+        },
+        grid: {
+          color: 'rgba(224, 224, 224, 0.1)',
+        },
+        title: {
+          display: true,
+          text: 'Date',
+          color: '#e0e0e0'
+        }
+      },
+      y: {
+        ticks: {
+          color: '#e0e0e0',
+          callback: function(value: any) {
+            return value + ' lbs';
+          }
+        },
+        grid: {
+          color: 'rgba(224, 224, 224, 0.1)',
+        },
+        beginAtZero: false,
+        title: {
+          display: true,
+          text: 'Weight (lbs)',
+          color: '#e0e0e0'
+        }
+      }
+    }
+  };
+
   return (
     <div style={{ 
       fontFamily: 'Segoe UI, Tahoma, Geneva, Verdana, sans-serif',
       maxWidth: '1400px',
       margin: '0 auto',
-      padding: '20px',
+      padding: '12px',
       background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
       minHeight: '100vh',
       color: '#e0e0e0'
     }}>
       <div style={{
         background: '#2d2d44',
-        borderRadius: '15px',
-        padding: '20px',
+        borderRadius: '16px',
+        padding: '16px',
         boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
       }}>
         <div style={{ 
           display: 'flex', 
           justifyContent: 'space-between', 
           alignItems: 'center',
-          marginBottom: '30px' 
+          marginBottom: '20px',
+          flexWrap: 'wrap',
+          gap: '10px'
         }}>
-          <div style={{ color: '#aaa', fontSize: '14px' }}>
+          <div style={{ 
+            color: '#aaa', 
+            fontSize: '14px',
+            order: 1
+          }}>
             Welcome, {user.username}
           </div>
           <h1 style={{
             textAlign: 'center',
             color: '#64ffda',
             margin: 0,
-            fontSize: '2.5em'
+            fontSize: 'clamp(1.5rem, 4vw, 2.5rem)',
+            order: 2,
+            flex: '1 1 100%'
           }}>
             Lifting Progress Tracker
           </h1>
@@ -343,7 +617,8 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
               borderRadius: '8px',
               padding: '8px 16px',
               cursor: 'pointer',
-              fontSize: '14px'
+              fontSize: '14px',
+              order: 3
             }}
           >
             Logout
@@ -351,9 +626,14 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
         </div>
 
         {/* Add Exercise to Session */}
-        <div style={{ marginBottom: '30px' }}>
-          <h2 style={{ color: '#64ffda', marginBottom: '15px' }}>Add Exercise to Workout</h2>
-          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+        <div style={{ marginBottom: '24px' }}>
+          <h2 style={{ color: '#64ffda', marginBottom: '15px', fontSize: 'clamp(1.2rem, 3vw, 1.5rem)' }}>Add Exercise to Workout</h2>
+          <div style={{ 
+            display: 'flex', 
+            gap: '12px', 
+            alignItems: 'stretch',
+            flexWrap: 'wrap'
+          }}>
             <select
               value={selectedExercise}
               onChange={(e) => setSelectedExercise(e.target.value)}
@@ -361,10 +641,13 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
                 background: '#3d3d5c',
                 color: '#e0e0e0',
                 border: '1px solid #64ffda',
-                borderRadius: '8px',
-                padding: '10px',
+                borderRadius: '10px',
+                padding: '12px 16px',
                 fontSize: '16px',
-                minWidth: '300px'
+                flex: '1 1 250px',
+                minWidth: '250px',
+                minHeight: '44px',
+                boxSizing: 'border-box'
               }}
             >
               {EXERCISES.map(exercise => (
@@ -379,11 +662,15 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
                 background: '#64ffda',
                 color: '#1a1a2e',
                 border: 'none',
-                borderRadius: '8px',
-                padding: '10px 20px',
+                borderRadius: '10px',
+                padding: '12px 24px',
                 cursor: 'pointer',
                 fontWeight: 'bold',
-                fontSize: '16px'
+                fontSize: '16px',
+                flex: '0 0 auto',
+                whiteSpace: 'nowrap',
+                minHeight: '44px',
+                boxSizing: 'border-box'
               }}
             >
               Add Exercise
@@ -395,30 +682,36 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
             const stats = getExerciseStats(selectedExercise);
             if (stats) {
               return (
-                <div style={{ marginTop: '15px', display: 'flex', gap: '20px' }}>
-                  <div style={{ background: '#3d3d5c', padding: '10px', borderRadius: '8px' }}>
-                    <div style={{ fontSize: '14px', color: '#aaa' }}>Last Weight</div>
-                    <div style={{ fontSize: '18px', fontWeight: 'bold' }}>{stats.lastWeight} lbs</div>
+                <div style={{ 
+                  marginTop: '15px', 
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+                  gap: '10px'
+                }}>
+                  <div style={{ background: '#3d3d5c', padding: '12px', borderRadius: '10px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '12px', color: '#aaa' }}>Last Weight</div>
+                    <div style={{ fontSize: '16px', fontWeight: 'bold' }}>{stats.lastWeight} lbs</div>
                   </div>
-                  <div style={{ background: '#3d3d5c', padding: '10px', borderRadius: '8px' }}>
-                    <div style={{ fontSize: '14px', color: '#aaa' }}>Max Weight</div>
-                    <div style={{ fontSize: '18px', fontWeight: 'bold' }}>{stats.maxWeight} lbs</div>
+                  <div style={{ background: '#3d3d5c', padding: '12px', borderRadius: '10px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '12px', color: '#aaa' }}>Max Weight</div>
+                    <div style={{ fontSize: '16px', fontWeight: 'bold' }}>{stats.maxWeight} lbs</div>
                   </div>
-                  <div style={{ background: '#3d3d5c', padding: '10px', borderRadius: '8px' }}>
-                    <div style={{ fontSize: '14px', color: '#aaa' }}>Sessions</div>
-                    <div style={{ fontSize: '18px', fontWeight: 'bold' }}>{stats.totalSessions}</div>
+                  <div style={{ background: '#3d3d5c', padding: '12px', borderRadius: '10px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '12px', color: '#aaa' }}>Sessions</div>
+                    <div style={{ fontSize: '16px', fontWeight: 'bold' }}>{stats.totalSessions}</div>
                   </div>
                 </div>
               );
             }
             return null;
           })()}
+
         </div>
 
         {/* Current Workout Session */}
         {currentSession.length > 0 && (
-          <div style={{ marginBottom: '30px' }}>
-            <h2 style={{ color: '#64ffda', marginBottom: '15px' }}>Current Workout Session</h2>
+          <div style={{ marginBottom: '24px' }}>
+            <h2 style={{ color: '#64ffda', marginBottom: '15px', fontSize: 'clamp(1.2rem, 3vw, 1.5rem)' }}>Current Workout Session</h2>
             {currentSession.map((sessionExercise, exerciseIndex) => {
               const exercise = EXERCISES.find(ex => ex.key === sessionExercise.exercise);
               const exerciseStats = getExerciseStats(sessionExercise.exercise);
@@ -430,20 +723,15 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
               return (
                 <div key={exerciseIndex} style={{
                   background: '#3d3d5c',
-                  borderRadius: '10px',
+                  borderRadius: '12px',
                   padding: '20px',
                   marginBottom: '20px'
                 }}>
-                  <div style={{ 
-                    display: 'flex', 
-                    justifyContent: 'space-between', 
-                    alignItems: 'center',
-                    marginBottom: '15px' 
-                  }}>
-                    <h3 style={{ color: '#64ffda', margin: 0 }}>
+                  <div style={{ marginBottom: '15px' }}>
+                    <h3 style={{ color: '#64ffda', margin: '0 0 10px 0' }}>
                       {exercise?.name} ({exercise?.muscle}) - {exercise?.repRange} reps
                     </h3>
-                    <div style={{ display: 'flex', gap: '10px' }}>
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                       <button
                         onClick={() => getAIRecommendations(sessionExercise.exercise)}
                         disabled={loadingAI[sessionExercise.exercise]}
@@ -451,10 +739,12 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
                           background: loadingAI[sessionExercise.exercise] ? '#666' : '#9c27b0',
                           color: 'white',
                           border: 'none',
-                          borderRadius: '6px',
-                          padding: '6px 12px',
+                          borderRadius: '8px',
+                          padding: '10px 18px',
                           cursor: loadingAI[sessionExercise.exercise] ? 'not-allowed' : 'pointer',
-                          fontSize: '14px'
+                          fontSize: '14px',
+                          minHeight: '40px',
+                          boxSizing: 'border-box'
                         }}
                       >
                         {loadingAI[sessionExercise.exercise] ? 'Loading...' : 'AI Tips'}
@@ -465,31 +755,57 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
                           background: '#ff6b6b',
                           color: 'white',
                           border: 'none',
-                          borderRadius: '6px',
-                          padding: '6px 12px',
+                          borderRadius: '8px',
+                          padding: '10px 18px',
                           cursor: 'pointer',
-                          fontSize: '14px'
+                          fontSize: '14px',
+                          minHeight: '40px',
+                          boxSizing: 'border-box'
                         }}
                       >
-                        Remove
+                        Remove Exercise
                       </button>
                     </div>
                   </div>
 
+                  {/* AI Recommendations for this exercise - moved to be right after AI button */}
+                  {aiRecommendations[sessionExercise.exercise] && (
+                    <div style={{ marginBottom: '15px' }}>
+                      <div style={{ fontSize: '14px', color: '#aaa', marginBottom: '8px' }}>
+                        AI Recommendations:
+                      </div>
+                      <div style={{
+                        background: '#2d2d44',
+                        padding: '10px',
+                        borderRadius: '6px',
+                        border: '1px solid #9c27b0',
+                        fontSize: '14px',
+                        lineHeight: '1.4'
+                      }}>
+                        {aiRecommendations[sessionExercise.exercise]}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Exercise Stats */}
                   {exerciseStats && (
-                    <div style={{ marginBottom: '15px', display: 'flex', gap: '15px' }}>
-                      <div style={{ background: '#2d2d44', padding: '8px 12px', borderRadius: '6px', flex: 1 }}>
+                    <div style={{ 
+                      marginBottom: '15px', 
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))',
+                      gap: '10px'
+                    }}>
+                      <div style={{ background: '#2d2d44', padding: '8px 12px', borderRadius: '6px', textAlign: 'center' }}>
                         <div style={{ fontSize: '12px', color: '#aaa' }}>Last Weight</div>
-                        <div style={{ fontSize: '16px', fontWeight: 'bold' }}>{exerciseStats.lastWeight} lbs</div>
+                        <div style={{ fontSize: '14px', fontWeight: 'bold' }}>{exerciseStats.lastWeight} lbs</div>
                       </div>
-                      <div style={{ background: '#2d2d44', padding: '8px 12px', borderRadius: '6px', flex: 1 }}>
+                      <div style={{ background: '#2d2d44', padding: '8px 12px', borderRadius: '6px', textAlign: 'center' }}>
                         <div style={{ fontSize: '12px', color: '#aaa' }}>Max Weight</div>
-                        <div style={{ fontSize: '16px', fontWeight: 'bold' }}>{exerciseStats.maxWeight} lbs</div>
+                        <div style={{ fontSize: '14px', fontWeight: 'bold' }}>{exerciseStats.maxWeight} lbs</div>
                       </div>
-                      <div style={{ background: '#2d2d44', padding: '8px 12px', borderRadius: '6px', flex: 1 }}>
+                      <div style={{ background: '#2d2d44', padding: '8px 12px', borderRadius: '6px', textAlign: 'center' }}>
                         <div style={{ fontSize: '12px', color: '#aaa' }}>Sessions</div>
-                        <div style={{ fontSize: '16px', fontWeight: 'bold' }}>{exerciseStats.totalSessions}</div>
+                        <div style={{ fontSize: '14px', fontWeight: 'bold' }}>{exerciseStats.totalSessions}</div>
                       </div>
                     </div>
                   )}
@@ -522,33 +838,14 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
                     </div>
                   )}
 
-                  {/* AI Recommendations for this exercise */}
-                  {aiRecommendations[sessionExercise.exercise] && (
-                    <div style={{ marginBottom: '15px' }}>
-                      <div style={{ fontSize: '14px', color: '#aaa', marginBottom: '8px' }}>
-                        AI Recommendations:
-                      </div>
-                      <div style={{
-                        background: '#2d2d44',
-                        padding: '10px',
-                        borderRadius: '6px',
-                        border: '1px solid #9c27b0',
-                        fontSize: '14px',
-                        lineHeight: '1.4'
-                      }}>
-                        {aiRecommendations[sessionExercise.exercise]}
-                      </div>
-                    </div>
-                  )}
 
                   {sessionExercise.sets.map((set, setIndex) => (
                     <div key={setIndex} style={{ 
-                      display: 'flex', 
-                      gap: '10px', 
+                      display: 'flex',
+                      gap: '8px', 
                       alignItems: 'center', 
-                      marginBottom: '10px' 
+                      marginBottom: '8px'
                     }}>
-                      <span style={{ minWidth: '60px' }}>Set {setIndex + 1}:</span>
                       <input
                         type="number"
                         placeholder="Weight"
@@ -558,12 +855,16 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
                           background: '#2d2d44',
                           color: '#e0e0e0',
                           border: '1px solid #64ffda',
-                          borderRadius: '4px',
-                          padding: '8px',
-                          width: '80px'
+                          borderRadius: '6px',
+                          padding: '10px 12px',
+                          fontSize: '16px',
+                          width: '90px',
+                          minWidth: '80px',
+                          minHeight: '40px',
+                          boxSizing: 'border-box'
                         }}
                       />
-                      <span>lbs</span>
+                      <span style={{ fontSize: '12px', color: '#aaa' }}>lbs</span>
                       <input
                         type="number"
                         placeholder="Reps"
@@ -573,12 +874,16 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
                           background: '#2d2d44',
                           color: '#e0e0e0',
                           border: '1px solid #64ffda',
-                          borderRadius: '4px',
-                          padding: '8px',
-                          width: '80px'
+                          borderRadius: '6px',
+                          padding: '10px 12px',
+                          fontSize: '16px',
+                          width: '90px',
+                          minWidth: '80px',
+                          minHeight: '40px',
+                          boxSizing: 'border-box'
                         }}
                       />
-                      <span>reps</span>
+                      <span style={{ fontSize: '12px', color: '#aaa' }}>reps</span>
                       {sessionExercise.sets.length > 1 && (
                         <button
                           onClick={() => removeSetFromExercise(exerciseIndex, setIndex)}
@@ -586,13 +891,16 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
                             background: '#ff6b6b',
                             color: 'white',
                             border: 'none',
-                            borderRadius: '4px',
-                            padding: '5px 10px',
+                            borderRadius: '6px',
+                            padding: '8px 12px',
                             cursor: 'pointer',
-                            fontSize: '12px'
+                            fontSize: '12px',
+                            whiteSpace: 'nowrap',
+                            minHeight: '36px',
+                            boxSizing: 'border-box'
                           }}
                         >
-                          Remove Set
+                          Remove
                         </button>
                       )}
                     </div>
@@ -604,11 +912,13 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
                       background: '#64ffda',
                       color: '#1a1a2e',
                       border: 'none',
-                      borderRadius: '6px',
-                      padding: '8px 16px',
+                      borderRadius: '8px',
+                      padding: '10px 20px',
                       cursor: 'pointer',
                       fontWeight: 'bold',
-                      marginTop: '10px'
+                      marginTop: '12px',
+                      minHeight: '40px',
+                      boxSizing: 'border-box'
                     }}
                   >
                     Add Set
@@ -623,12 +933,14 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
                 background: '#4CAF50',
                 color: 'white',
                 border: 'none',
-                borderRadius: '8px',
-                padding: '15px 30px',
+                borderRadius: '12px',
+                padding: '16px 32px',
                 cursor: 'pointer',
                 fontWeight: 'bold',
                 fontSize: '18px',
-                width: '100%'
+                width: '100%',
+                minHeight: '52px',
+                boxSizing: 'border-box'
               }}
             >
               Save Complete Workout Session
@@ -636,38 +948,225 @@ export default function LiftingTracker({ user, onLogout }: LiftingTrackerProps) 
           </div>
         )}
 
-        {/* Recent Workouts */}
-        <div>
-          <h2 style={{ color: '#64ffda', marginBottom: '15px' }}>Recent Workouts</h2>
-          <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
-            {workouts
-              .slice(-15)
-              .reverse()
-              .map((workout, index) => (
-                <div key={index} style={{
+        {/* Progress Charts & Exercise History Section */}
+        <div style={{ marginBottom: '20px' }}>
+          <h2 style={{ color: '#64ffda', marginBottom: '15px', fontSize: 'clamp(1.2rem, 3vw, 1.5rem)' }}>Exercise Analysis</h2>
+          
+          {/* Exercise selection for graphs and history */}
+          <div style={{ marginBottom: '20px' }}>
+            <select
+              value={selectedGraphExercise}
+              onChange={(e) => setSelectedGraphExercise(e.target.value)}
+              style={{
+                background: '#3d3d5c',
+                color: '#e0e0e0',
+                border: '1px solid #64ffda',
+                borderRadius: '8px',
+                padding: '12px 16px',
+                fontSize: '16px',
+                width: '100%',
+                maxWidth: '400px',
+                minHeight: '44px',
+                boxSizing: 'border-box'
+              }}
+            >
+              {EXERCISES.map(exercise => (
+                <option key={exercise.key} value={exercise.key}>
+                  {exercise.name} ({exercise.muscle})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Charts for selected graph exercise */}
+          {(() => {
+            const oneRMData = get1RMChartData(selectedGraphExercise);
+            const volumeData = getVolumeChartData(selectedGraphExercise);
+            const maxWeightData = getMaxWeightChartData(selectedGraphExercise);
+            
+            if (!oneRMData || !volumeData || !maxWeightData) {
+              return (
+                <div style={{
                   background: '#3d3d5c',
-                  padding: '15px',
-                  borderRadius: '8px',
-                  marginBottom: '10px'
+                  borderRadius: '10px',
+                  padding: '20px',
+                  textAlign: 'center',
+                  color: '#aaa'
                 }}>
-                  <div style={{ fontWeight: 'bold', marginBottom: '10px' }}>
-                    {EXERCISES.find(ex => ex.key === workout.exercise)?.name} - {workout.date}
+                  No workout data available for {EXERCISES.find(ex => ex.key === selectedGraphExercise)?.name}. 
+                  Start tracking this exercise to see progress charts!
+                </div>
+              );
+            }
+            
+            return (
+              <div>
+                <h3 style={{ color: '#64ffda', marginBottom: '15px', fontSize: 'clamp(1.1rem, 2.5vw, 1.3rem)' }}>
+                  Progress Charts for {EXERCISES.find(ex => ex.key === selectedGraphExercise)?.name}
+                </h3>
+                
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                  gap: '15px',
+                  marginBottom: '25px'
+                }}>
+                  {/* 1RM Progression Chart */}
+                  <div style={{
+                    background: '#3d3d5c',
+                    borderRadius: '12px',
+                    padding: '16px',
+                    height: '280px',
+                    minHeight: '280px'
+                  }}>
+                    <h4 style={{ 
+                      color: '#e0e0e0', 
+                      margin: '0 0 15px 0',
+                      fontSize: '16px'
+                    }}>
+                      1RM Progression
+                    </h4>
+                    <div style={{ height: '230px' }}>
+                      <Line data={oneRMData} options={chartOptions} />
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
-                    {workout.sets.map((set, setIndex) => (
-                      <div key={setIndex} style={{
-                        background: '#4d4d6b',
-                        padding: '5px 10px',
-                        borderRadius: '4px',
-                        fontSize: '14px'
-                      }}>
-                        {set.weight} lbs × {set.reps}
-                      </div>
-                    ))}
+
+                  {/* Max Weight Chart */}
+                  <div style={{
+                    background: '#3d3d5c',
+                    borderRadius: '12px',
+                    padding: '16px',
+                    height: '280px',
+                    minHeight: '280px'
+                  }}>
+                    <h4 style={{ 
+                      color: '#e0e0e0', 
+                      margin: '0 0 15px 0',
+                      fontSize: '16px'
+                    }}>
+                      Max Weight
+                    </h4>
+                    <div style={{ height: '230px' }}>
+                      <Scatter data={maxWeightData} options={maxWeightChartOptions} />
+                    </div>
+                  </div>
+
+                  {/* Volume Chart */}
+                  <div style={{
+                    background: '#3d3d5c',
+                    borderRadius: '12px',
+                    padding: '16px',
+                    height: '280px',
+                    minHeight: '280px'
+                  }}>
+                    <h4 style={{ 
+                      color: '#e0e0e0', 
+                      margin: '0 0 15px 0',
+                      fontSize: '16px'
+                    }}>
+                      Volume per Session
+                    </h4>
+                    <div style={{ height: '230px' }}>
+                      <Bar data={volumeData} options={chartOptions} />
+                    </div>
                   </div>
                 </div>
-              ))}
-          </div>
+              </div>
+            );
+          })()}
+
+          {/* Recent Sessions for Selected Exercise */}
+          {(() => {
+            const exerciseHistory = workouts
+              .filter(w => w.exercise === selectedGraphExercise)
+              .slice(-10)
+              .reverse();
+            
+            if (exerciseHistory.length === 0) {
+              return (
+                <div style={{
+                  background: '#3d3d5c',
+                  borderRadius: '12px',
+                  padding: '20px',
+                  textAlign: 'center',
+                  color: '#aaa',
+                  marginTop: '20px'
+                }}>
+                  No workout history available for {EXERCISES.find(ex => ex.key === selectedGraphExercise)?.name}. 
+                  Complete some workouts to see your session history!
+                </div>
+              );
+            }
+            
+            return (
+              <div style={{ marginTop: '25px' }}>
+                <h3 style={{ 
+                  color: '#64ffda', 
+                  marginBottom: '15px', 
+                  fontSize: 'clamp(1.1rem, 2.5vw, 1.3rem)' 
+                }}>
+                  Recent Sessions - {EXERCISES.find(ex => ex.key === selectedGraphExercise)?.name}
+                </h3>
+                <div style={{ 
+                  display: 'flex', 
+                  flexDirection: 'column', 
+                  gap: '12px',
+                  maxHeight: '400px',
+                  overflowY: 'auto',
+                  padding: '4px'
+                }}>
+                  {exerciseHistory.map((session, sessionIndex) => (
+                    <div key={sessionIndex} style={{
+                      background: '#3d3d5c',
+                      padding: '16px',
+                      borderRadius: '10px',
+                      border: '1px solid rgba(100, 255, 218, 0.1)'
+                    }}>
+                      <div style={{ 
+                        color: '#64ffda', 
+                        fontWeight: 'bold',
+                        marginBottom: '12px',
+                        fontSize: '16px'
+                      }}>
+                        {new Date(session.date).toLocaleDateString('en-US', { 
+                          weekday: 'short', 
+                          month: 'short', 
+                          day: 'numeric' 
+                        })}
+                      </div>
+                      <div style={{ 
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: '8px'
+                      }}>
+                        {session.sets.map((set, setIndex) => (
+                          <div key={setIndex} style={{
+                            background: '#2d2d44',
+                            padding: '8px 12px',
+                            borderRadius: '6px',
+                            fontSize: '14px',
+                            fontWeight: '500',
+                            minWidth: '65px',
+                            textAlign: 'center',
+                            border: '1px solid rgba(100, 255, 218, 0.2)'
+                          }}>
+                            {set.weight}×{set.reps}
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{
+                        marginTop: '10px',
+                        fontSize: '12px',
+                        color: '#aaa'
+                      }}>
+                        Volume: {session.sets.reduce((sum, set) => sum + (set.weight * set.reps), 0)} lbs
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </div>
     </div>

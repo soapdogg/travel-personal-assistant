@@ -212,14 +212,6 @@ export default function LegacyAuth({ onLogin }: LegacyAuthProps) {
           </button>
         </form>
 
-        <div style={{
-          marginTop: '20px',
-          textAlign: 'center',
-          fontSize: '14px',
-          color: '#aaa'
-        }}>
-          Use your existing lifting tracker credentials
-        </div>
       </div>
     </div>
   );
